@@ -1,0 +1,172 @@
+---
+title: "GroupSummary"
+author: "Keenan Walch"
+date: "April 15, 2015"
+output: html_document
+---
+
+This code summarizes the TouchScreenEE mice group one on the basis of Houselight ON (ON) vs. Houselight OFF (OFF).
+
+The script grabs the four "Summary" .csv files from the directory.
+
+All of the analysis except the final graph (performance over 5 days) is done on the "No Correction" data. This is because if we include correction trials mice 6, 10, 11, 13, 18 didn't pass.
+
+The graphs saying "No Corrections" still don't include mice 6 and 11. This is because they did not complete the criteria to advanced but were advanced regardless. We, therefore, created an artificial cutoff and did not think including them in this data at that artificial maximum would be a good way of representing that data.
+
+
+
+
+```{r}
+
+library(plyr)
+library(ggplot2)
+initialdaypassed<- read.csv(file = "initialdaypassed.csv", header = TRUE, sep = ",", stringsAsFactors = FALSE)
+
+totaltimerecentmean<- read.csv(file = "totaltimerecentmean.csv", header = TRUE, sep = ",", stringsAsFactors = FALSE)
+
+initialdaypassednc<- read.csv(file = "initialdaypassednc.csv", header = TRUE, sep = ",", stringsAsFactors = FALSE)
+
+performancePI<- read.csv(file = "performancePI.csv", header = TRUE, sep = ",", stringsAsFactors = FALSE)
+
+addGroup<- function(x) {
+  for (i in 1:nrow(x)) {
+  
+  if (x$mouse[i] %in% c(1,3,5,7,9,11,13,15,17,19,21,23)){ x$Group[i]<- "OFF"} else {x$Group[i]<- "ON"}}
+  return(x)
+}
+
+GetSE<- function (data1, data2){
+se1<- sd(data1)/sqrt(length(data1))
+se2<- sd(data2)/sqrt(length(data2))
+se<- c(se1,se2)
+}
+
+
+```
+
+
+```{r}
+
+
+totaltimerecentmean<-addGroup(totaltimerecentmean)
+totaltimerecentmean<- totaltimerecentmean[totaltimerecentmean$mouse %in% c(2:23),]
+
+
+
+###Stats
+
+offtime<- totaltimerecentmean[totaltimerecentmean$Group == "OFF", 2]
+ontime<- totaltimerecentmean[totaltimerecentmean$Group == "ON", 2]
+
+means1<-c(mean(offtime),mean(ontime))
+se<-GetSE(offtime, ontime)
+
+summarytime<-ddply(totaltimerecentmean, .(Group), summarize, AverageTime = mean(averagetime))
+summarytime$se<-se
+summarytime$mean<-means1
+
+ggplot(summarytime, aes(x = Group, y = AverageTime)) + 
+  geom_bar(aes( fill = Group), stat = "identity") + 
+  geom_errorbar(aes(ymax = (summarytime$mean+summarytime$se), ymin = (summarytime$mean - summarytime$se)), width = .25) + ggtitle("Average Time on Most Recent 5 Days")
+
+totaltimerecentmean$mouse<- as.factor(totaltimerecentmean$mouse)
+
+totaltimerecentmean[totaltimerecentmean$mouse %in% c(2:23),]
+
+ggplot(totaltimerecentmean, aes(x = Group, y = averagetime, group = mouse)) + geom_point(aes(color = mouse), position = position_jitter (w = .1)) + ggtitle( "Average Time on Most Recent 5 Days")
+
+```
+
+
+Repeat for Initial Day Passed
+
+```{r}
+
+initialdaypassednc <- addGroup(initialdaypassednc)
+
+
+###Stats
+
+off<- initialdaypassednc[initialdaypassednc$Group == "OFF", 3]
+on<- initialdaypassednc[initialdaypassednc$Group == "ON", 3]
+
+
+
+means<-c(mean(off),mean(on))
+se<-GetSE(off, on)
+
+summary<-ddply(initialdaypassednc, .(Group), summarize, TotalTrials = mean(TotalTrials))
+summary$se<-se
+summary$mean<-means
+
+ggplot(summary, aes(x = Group, y = TotalTrials)) + 
+  geom_bar(aes( fill = Group), stat = "identity") + 
+  geom_errorbar(aes(ymax = (summary$mean+summary$se), ymin = (summary$mean - summary$se)), width = .25) + ggtitle("Total Trials to Advance No Corrections")
+
+initialdaypassednc$mouse<- as.factor(initialdaypassednc$mouse)
+
+ggplot(initialdaypassednc, aes(x = Group, y = TotalTrials, group = mouse)) + geom_point(aes(color = mouse), position = position_jitter (w = .1)) + ggtitle( "Total Trials to Advance No Corrections")
+
+
+
+```
+
+
+```{r}
+
+### Total Days to Pass
+
+
+### Stats
+off<- initialdaypassednc[initialdaypassednc$Group == "OFF", 2]
+on<- initialdaypassednc[initialdaypassednc$Group == "ON", 2]
+
+
+
+means<-c(mean(off),mean(on))
+se<-GetSE(off, on)
+
+summary<-ddply(initialdaypassednc, .(Group), summarize, DaysOnSchedulePassed = mean(DaysOnSchedulePassed))
+summary$se<-se
+summary$mean<-means
+
+
+ggplot(summary, aes(x = Group, y = DaysOnSchedulePassed)) + geom_bar(aes( fill = Group), stat = "identity") + geom_errorbar(aes(ymax = (summary$mean+summary$se), ymin = (summary$mean - summary$se)), width = .25) + ggtitle("Total Days to Advance no Corrections")
+
+initialdaypassednc$mouse<- as.factor(initialdaypassednc$mouse)
+
+ggplot(initialdaypassednc, aes(x = Group, y = DaysOnSchedulePassed, group = mouse)) + geom_point(aes(color = mouse), position = position_jitter (w = .1)) + ggtitle( "Total Days to Advance No Corrections")
+
+
+```
+
+
+
+```{r}
+
+performance5days<- performancePI[performancePI$date %in% c("2015-03-23", "2015-03-24", "2015-03-25", "2015-03-26", "2015-03-27") & performancePI$mouse %in% c(2:23), ]
+
+### Stats
+for (i in 1:nrow(performance5days)) {performance5days$correctpercent[i]<- performance5days$correct[i]/performance5days$totaltrials[i]}
+off<- performance5days[performance5days$Group == "OFF", 7]
+on<- performance5days[performance5days$Group == "ON", 7]
+
+
+
+means<-c(mean(off),mean(on))
+se<-GetSE(off, on)
+
+summary<-ddply(performance5days, .(Group), summarize, correctpercent = mean(correctpercent))
+summary$se<-se
+summary$mean<-means
+
+ggplot(summary, aes(x = Group, y = correctpercent)) + geom_bar(aes( fill = Group), stat = "identity") + geom_errorbar(aes(ymax = (summary$mean+summary$se), ymin = (summary$mean - summary$se)), width = .25) + ggtitle("Performance Over Last 5 Days")
+
+performancemouse<-ddply(performance5days, .(Group, mouse), summarize, correctpercent = mean(correctpercent))
+
+performancemouse$mouse<-as.factor(performancemouse$mouse)
+
+ggplot(performancemouse, aes(x = Group, y = correctpercent, group = mouse)) + geom_point(aes(color = mouse), position = position_jitter (w = .1)) + ggtitle("Performance Over Last 5 Days")
+
+```
+

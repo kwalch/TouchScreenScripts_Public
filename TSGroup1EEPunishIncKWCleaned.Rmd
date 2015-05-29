@@ -1,0 +1,554 @@
+---
+title: "PunishInc Analysis"
+author: "KW"
+date: "Friday, January 30, 2015"
+output: html_document
+---
+```{r set-options, echo = FALSE, cache = FALSE}
+options(width = 100)
+```
+This script takes as its input from a mouse touch screen box, exported as csv files, with one file corresponding to all the raw data for one mouse during a single session. Punish Incorrect raw data files should be saved in a seperate directory from other files. The script will gather all the data in 4 different data frames for a overall summary and analysis. The script will also be used to monitor how the mice perform on a day to day basis.
+
+Files to use are pulled from a subfolder "PI" in "StimulusConfigData" under the directory: 
+
+`r getwd() ` 
+
+Complete sets of mice are not required, as each session is processed individually.
+
+
+3 output measures are analyzed:
+
+- CorrGridPosition = The grid location where the image has been displayed
+- GridTouch = Where the mouse actually touched
+- Correct = If CorrGridPosition=GridTouch than correct=1 if not then correct = 0.
+
+The script analyzes overall performance and helps visualize location preference for each mouse.
+
+Required R packages:
+
+- base
+- plyr
+- ggplot2
+- RColorBrewer
+
+SUMMARIES:
+
+initialdaypassed --> Total Days it took to pass, and total trials it took to pass
+                     WITH CORRECTIONS
+totaltimerecentmean --> Average time it took to finish schedule over most recent 5 days
+
+initialdaypassednc --> Total Days it took to pass, and total trials it took to pass
+                     WITHOUT CORRECTIONS
+                     
+performance --> Overall performance of the mice
+
+```{r}
+filestouse <- {}
+for(mouse in 1:25){
+    filepattern <- paste("Mouse", mouse, "raw.csv", sep = "")
+    filestouse <- append(filestouse, list.files(path = "../StimulusConfigData/PI", pattern = filepattern))
+}
+```
+
+Data from the following dates will be analyzed:
+```{r}
+datestouse <- unique(as.Date(gsub("Mouse[1-25]raw.csv", "", filestouse), format = "%Y%m%d"))
+print(datestouse)
+```
+
+Read in schedule info from data summary sheet, same as used in daily reporting script.  This sheet MUST be current up to the last date present in the raw csv files.  
+
+
+Generate empty data frame for storing reduced data
+```{r}
+dfkeep <- data.frame(date = {}, mouse = {}, GridPosition = {}, correct = {}, GridTouch = {})
+```
+
+### Loop through individual files and bind data across mice and days.
+
+```{r}
+for(fil in filestouse){
+    print(fil)
+    ###Read in raw data for a single session, extract mouse number, session date, and schedule
+    tempfile <- read.csv(file = paste("../StimulusConfigData/PI/",fil,sep=""), header = TRUE, stringsAsFactors = FALSE)
+    
+    tempfile <- tempfile[tempfile$Item_Name %in% c("Display Image", "Correct", "Incorrect", "DelayTimer", "Bussey Mouse Operant Mode 5 x 1 x low", "Start Trial", "Start Correction Trial", "Group Change"),]
+
+    
+    numrows <- length(tempfile$Item_Name)
+    mouseid <- as.integer(gsub("^[0-9]*(Mouse)|raw.csv","",fil))
+    sessiondate <- as.Date(gsub("Mouse[1-25]raw.csv","", fil), format="%Y%m%d")
+   
+  
+    ### Delete all FirBeam1 rows because corrects weren't always following the touchdown events
+    
+    badlines<-(tempfile[,4])
+    badlines1<-(grep("^FIRBeam #1$",badlines))
+    if ((length(badlines1))>0) {tempfile<-tempfile[-c(badlines1),]} else {tempfile<-tempfile}
+    
+    ### Grab all the correct and incorrect rows, go back one row to find where the choice phase was touched
+    correctlines<-(tempfile[,4])
+    correctlines1<-(grep("^Correct$",correctlines))
+    incorrectlines<-(tempfile[,4])
+    incorrectlines1<-(grep("^Incorrect$",correctlines))
+    responses<-c(incorrectlines1, correctlines1)
+    responses1<- (responses-1)
+    responses2<- sort(responses1, decreasing = FALSE)
+
+    
+    
+    ### Treat unfinished trials like they never happened
+    initiated1 <- sum(tempfile$Item_Name == "Display Image")
+    switcher<-c(initiated1 == length(responses2))
+
+
+    
+    ###generate empty data frame with number of rows based on number of trials initiated
+    if (switcher == FALSE ) {dfrows <- sum(tempfile$Item_Name == "Display Image")-1} else 
+      {dfrows <- sum(tempfile$Item_Name == "Display Image")}
+    
+  ### Fill data frame  
+    latdf <- data.frame(date = rep(sessiondate, dfrows), mouse = as.factor(mouseid), CorrGridPosition = "", GridTouch = "", correct = "", CompBroken = "")
+    
+        
+        
+    latdf$GridTouch<- tempfile[responses2, 9]
+    
+    
+    CorrGridPosition<- tempfile[tempfile$Alias_Name == "Training_Images", 9]
+    if (switcher == FALSE){ latdf$CorrGridPosition<- CorrGridPosition[1:length(CorrGridPosition)-1]} else {
+   
+    latdf$CorrGridPosition<- CorrGridPosition[CorrGridPosition>0]}
+   
+   correct<- c(latdf$CorrGridPosition == latdf$GridTouch) 
+   
+    latdf$correct<- as.numeric(correct)
+  
+  ###Make sure computer didn't break. Criteria is last imput is < 1000s from the last imput
+  
+  times<-tempfile[tempfile$Evnt_Name == "Group Change Event", 1]
+  lasttimes<-times[(length(times)-1):length(times)]
+  
+  if ((lasttimes[2]-lasttimes[1]) > 1000) {latdf$CompBroken <- "YES"} else {latdf$CompBroken <- "NO"}
+    
+  
+  ### Subset all the times where "Start Trial" or "Start Correction Trial" come up
+inames<-tempfile$Item_Name
+regtrials<-grep("Start Trial" , tempfile$Item_Name)
+correctiontrials<-grep("Start Correction Trial", tempfile$Item_Name)
+all<-sort(c(regtrials,correctiontrials), decreasing = FALSE)
+all1<-inames[all]
+
+if (length(all1) != length(responses2)){all1<- all1[1:length(responses2)]} else {all1<-all1}
+
+### Add Correction Column
+new<-c()
+for( i in seq_along(all1)){if (all1[i] == "Start Trial"){new[i]<- FALSE} else {new[i]<- TRUE}}
+latdf$Correction<-new
+
+
+alltimes<-tempfile[,1]
+totaltime<-alltimes[length(alltimes)]
+for (i in 1:nrow(latdf)) {latdf$TimeFinished[i]  <- totaltime}
+
+
+    ###bind data from individual file to all previous files
+    dfkeep <- rbind(dfkeep, latdf)
+}
+```
+  
+```{r fig.height = 11, fig.width = 11}
+### Graph Total Number of Correct Touches during a particular Correct Position
+
+
+
+library(plyr)
+library(ggplot2)
+library(RColorBrewer)
+
+### Take out all broken trials and list the performance
+
+broken<-dfkeep[dfkeep$CompBroken == "YES", ]
+ddply(broken, .(date,mouse), summarize, correct = sum(correct), totaltrials = length(CorrGridPosition))
+
+###Continue finding overallperformance
+
+f<- ddply(dfkeep, .(mouse, CorrGridPosition), summarize, correct = sum(correct))
+g<- ggplot(f, aes( x= CorrGridPosition, y = correct, group = mouse)) + geom_point()+ facet_wrap(~ mouse) + ggtitle("Total Corrects at Each Stimulus Location")
+g
+
+performance<- ddply(dfkeep, .(mouse, date), summarize, correct = sum(correct), totaltrials = length(CorrGridPosition))
+
+### Create a DaysOnSchedule column
+performance<- ddply(performance, .(mouse), mutate, DaysOnSchedule = rank(unique(date)))
+
+
+###Create a daysonschedule column
+
+palettekw<-c("#89C5DA", "#DA5724", "#74D944", "#CE50CA", "#3F4921", "#C0717C", "#CBD588", "#5F7FC7", "#673770", "#D3D93E", "#38333E", "#508578", "#D7C1B1", "#689030", "#AD6F3B", "#CD9BCD", "#D14285", "#6DDE88", "#652926", "#7FDCC0", "#C84248", "#8569D5", "#5E738F", "#D1A33D", "#8A7C64", "#599861")
+
+overallperformance<- ggplot(performance, aes(x = DaysOnSchedule, y = (correct/totaltrials), group = mouse)) + geom_point(aes(color = mouse), size = 3) + geom_line(aes(color = mouse)) + ggtitle("Overall Performance") + geom_hline(aes(yintercept = .85), size = .5) + scale_color_manual( values = palettekw)
+
+
+overallperformance
+
+for (i in 1:nrow(performance)) {
+  
+  if (performance$mouse[i] %in% c(1,3,5,7,9,11,13,15,17,19,21,23)){ performance$Group[i]<- "OFF"} else {performance$Group[i]<- "ON"}
+}
+
+GroupPerformance<- ggplot(performance, aes(  x = Group, y = (correct/totaltrials), group = Group)) + geom_bar(aes(color = Group), size = 3, stat = "identity") + ggtitle("Group Performance") + geom_hline(aes(yintercept = .85), size = .5) + scale_color_manual( values = palettekw)
+```
+
+
+
+Graphs the correct percent for each correct grid location. The second graph divides up the percent correct over time. The header for the second graph reads: mouse, correct grid position.
+
+```{r fig.height = 20, fig.width = 11}
+
+### Graph %Correct/Position over time
+
+z<- ddply(dfkeep, .(date ,mouse, CorrGridPosition), summarize, totalgridposition = length(CorrGridPosition),  correct = sum(correct))
+
+### Make a DaysOnSchedule column for "z"
+dates<-z$date
+mice<-z$mouse
+for(i in 1:nrow(z)){z$DaysOnSchedule[i]<- performance[((mice[i] == performance$mouse) & (dates[i] == performance$date)), 5]}
+
+### Percent correct for each mouse for each grid position. Notation is as follows: (Mouse #, CorrectGridPosition)
+
+correctpercentday<- ggplot(z, aes( x= DaysOnSchedule, y = (correct/totalgridposition), group = mouse)) + geom_point(aes(color = mouse), size = 3) + geom_line(aes(color = mouse)) + facet_wrap(~ mouse + CorrGridPosition, ncol = 5) + ggtitle("%Correct for each Position over Time")
+
+correctpercentday    
+
+
+
+```
+
+
+
+
+Passing with corrections: Takes two day intervals and determines what day each mouse passed( 85%< over each location over a two day interval. The end table will read 15 if passed because it sums each location that passed (1+2+3+4+5))
+
+```{r}
+
+### Make sure to only do analysis up until the second to last day the mice were run 
+
+alldate<-c(unique(z$date))
+lastdate<-alldate[length(alldate)]
+lastdaterow<-grep(lastdate, z$date)
+lastdaterow<-lastdaterow[1]
+
+### For every row in z grab the correct # of trials & add it to the correct # of trials for the next day. What this does is give total corrects for each gridposition for days 1&2, 2&3, 3&4... Do this logic again for total trials
+
+for (i in 1:nrow(z)){
+  
+  day<-(z$DaysOnSchedule[i])+1
+  gridpos<-(z$CorrGridPosition[i])
+  mouse<-z$mouse[i]
+
+  
+if (i < lastdaterow){ z$twodayscorrect[i] <-z$correct[i] + (z[z$CorrGridPosition %in% gridpos & z$DaysOnSchedule %in% day & z$mouse %in% mouse, 5])} else {z$twodayscorrect[i]<- 0}
+
+if (i < lastdaterow){z$twodaystotal[i] <-z$totalgridposition[i] + (z[z$CorrGridPosition %in% gridpos & z$DaysOnSchedule %in% day & z$mouse %in% mouse, 4])} else {z$twodaystotal[i] <-1}
+  
+}
+
+### Make a correct percent column
+
+z$correctpercentbin<- z$twodayscorrect/z$twodaystotal
+
+for (i in 1:nrow(z)){ 
+  if (z$correctpercentbin[i] >= .85) {z$passbin[i]<- "YES"} else {z$passbin[i] <- "NO"}
+}
+
+### If the correct percent is over 85% --> YES. Subset out "Yes"
+
+passing<-z[z$passbin == "YES",]
+
+### Make a table. IF MOUSE PASSES FOR BOTH DAYS ON ALL ROWS IT WILL HAVE A COLUMN FOR ALL 5 Positions. (1+2+3+4+5) = 15. If Graph reads 15 that day it passed. 
+
+allpassing<-ddply(passing, .(mouse, DaysOnSchedule), summarize, CorrGridPosition = sum(CorrGridPosition))
+
+allpassing$DayPassed<- allpassing$DaysOnSchedule+1
+
+
+finalday<-allpassing[allpassing$CorrGridPosition == 15,]
+
+
+
+totaltrials<-ddply(z, .(mouse, DaysOnSchedule), summarize, total = sum(twodayscorrect))
+
+
+
+micedaypassed <-unique(finalday$mouse)
+
+initialdaypassed <- data.frame()
+for (i in seq_along(micedaypassed)) { 
+  
+  sample<-micedaypassed[i] == finalday$mouse
+  sample2<-grep(TRUE, sample)
+  sample2<-sample2[1]
+ initialdaypassed[i, "mouse"]<- as.numeric(micedaypassed[i])
+  initialdaypassed[i, "DaysOnSchedulePassed"]<- as.numeric(finalday[sample2,4])
+ 
+
+ }
+
+### For each line in initialdaypassed find where mouse= mouse in total trials, and all the rows less than that day passed. Add those all together to get the total trials it took to pass.
+for (i in 1:nrow(initialdaypassed)){
+allrowsbeforedaypassed<-totaltrials[totaltrials$mouse == initialdaypassed$mouse[i] & totaltrials$DaysOnSchedule <= initialdaypassed$DaysOnSchedule[i],]
+initialdaypassed[i, "TotalTrials"]<-sum(allrowsbeforedaypassed$total)
+}
+
+
+
+initialdaypassed
+
+
+```
+
+
+
+Graph Total Time
+```{r}
+
+totaltime<- ddply(dfkeep, .(mouse, date), summarize, correct = sum(correct), totaltrials = length(CorrGridPosition), totaltime = mean(TimeFinished))
+
+### Create a DaysOnSchedule column
+totaltime<- ddply(totaltime, .(mouse), mutate, DaysOnSchedule = rank(unique(date)))
+
+
+### Find five days ago and grab all those rows
+days<-sort(unique(totaltime$date))
+fivedaysago<-days[length(days)-5]
+
+totaltimerecent<-totaltime[totaltime$date > fivedaysago,]
+
+ggplot(totaltimerecent, aes(x = DaysOnSchedule, y = totaltime, group = mouse)) + geom_point(aes(color = mouse), size = 3) + geom_line(aes(color = mouse)) + ggtitle("Total Time") + scale_color_manual( values = palettekw) + facet_wrap(~ mouse, ncol = 4)
+
+totaltimerecentmean<-ddply(totaltimerecent, .(mouse), summarize, averagetime = mean(totaltime))
+
+ggplot(totaltimerecentmean, aes(x = mouse, y = averagetime)) + geom_bar(aes(color = mouse), stat = "identity", size = 3) + ggtitle(" Average Time Over Recent 5 Days") + scale_color_manual( values = palettekw)
+
+totaltimerecentmean
+
+```
+
+Passing without corrections: Takes two day intervals and determines what day each mouse passed( 85%< over each location over a two day interval. The end table will read 15 if passed because it sums each location that passed (1+2+3+4+5))
+```{r}
+
+
+dfkeepnocorrections<-dfkeep[dfkeep$Correction == "FALSE",]
+
+z1<- ddply(dfkeepnocorrections, .(date ,mouse, CorrGridPosition), summarize, totalgridposition = length(CorrGridPosition),  correct = sum(correct))
+
+
+alldate<-c(unique(z1$date))
+lastdate<-alldate[length(alldate)]
+lastdaterow<-grep(lastdate, z1$date)
+lastdaterow<-lastdaterow[1]
+
+### Make a DaysOnSchedule column for "z"
+dates<-z1$date
+mice<-z1$mouse
+for(i in 1:nrow(z1)){z1$DaysOnSchedule[i]<- performance[((mice[i] == performance$mouse) & (dates[i] == performance$date)), 5]}
+
+for (i in 1:nrow(z1)){
+  
+  day<-(z1$DaysOnSchedule[i])+1
+  gridpos<-(z1$CorrGridPosition[i])
+  mouse<-z1$mouse[i]
+
+  
+if (i < lastdaterow){ z1$twodayscorrect[i] <-z1$correct[i] + (z1[z1$CorrGridPosition %in% gridpos & z1$DaysOnSchedule %in% day & z1$mouse %in% mouse, 5])} else {z1$twodayscorrect[i]<- 0}
+
+if (i < lastdaterow){z1$twodaystotal[i] <-z1$totalgridposition[i] + (z1[z1$CorrGridPosition %in% gridpos & z1$DaysOnSchedule %in% day & z1$mouse %in% mouse, 4])} else {z1$twodaystotal[i] <-1}
+  
+}
+
+### Make a correct percent column
+
+z1$correctpercentbin<- z1$twodayscorrect/z1$twodaystotal
+
+for (i in 1:nrow(z1)){ 
+  if (z1$correctpercentbin[i] >= .85) {z1$passbin[i]<- "YES"} else {z1$passbin[i] <- "NO"}
+}
+
+### If the correct percent is over 85% --> YES. Subset out "Yes"
+
+passingnc<-z1[z1$passbin == "YES",]
+
+### Make a table. IF MOUSE PASSES FOR BOTH DAYS ON ALL ROWS IT WILL HAVE A COLUMN FOR ALL 5 Positions. (1+2+3+4+5) = 15. If Graph reads 15 that day it passed. 
+
+allpassingnc<-ddply(passingnc, .(mouse, DaysOnSchedule), summarize, CorrGridPosition = sum(CorrGridPosition))
+
+allpassingnc$DayPassed<- allpassingnc$DaysOnSchedule+1
+
+ggplot(allpassingnc, aes( x =DayPassed, y = CorrGridPosition, group = mouse)) + geom_point()+ facet_wrap(~ mouse) +  geom_hline(aes(yintercept = 14.5), size = .5) + ggtitle("Passed on all 5 locations two days in a row: NO CORRECTIONS")
+
+
+### NO CORRECTION TRIALS
+
+
+
+totaltrialsnc<-ddply(z1, .(mouse, DaysOnSchedule), summarize, total = sum(twodayscorrect))
+
+finaldaync<-allpassingnc[allpassingnc$CorrGridPosition == 15,]
+
+
+
+
+
+micedaypassednc <-unique(finaldaync$mouse)
+
+initialdaypassednc <- data.frame()
+for (i in seq_along(micedaypassednc)) { 
+  
+  samplenc<-micedaypassednc[i] == finaldaync$mouse
+  sample2nc<-grep(TRUE, samplenc)
+  sample2nc<-sample2nc[1]
+ initialdaypassednc[i, "mouse"]<- as.numeric(micedaypassednc[i])
+  initialdaypassednc[i, "DaysOnSchedulePassed"]<- as.numeric(finaldaync[sample2nc,4])
+ 
+
+ }
+
+### For each line in initialdaypassed find where mouse= mouse in total trials, and all the rows less than that day passed. Add those all together to get the total trials it took to pass.
+for (i in 1:nrow(initialdaypassednc)){
+allrowsbeforedaypassednc<-totaltrialsnc[totaltrialsnc$mouse == initialdaypassednc$mouse[i] & totaltrialsnc$DaysOnSchedule <= initialdaypassednc$DaysOnSchedule[i],]
+initialdaypassednc[i, "TotalTrials"]<-sum(allrowsbeforedaypassednc$total)
+}
+
+initialdaypassednc
+```
+
+
+
+Analyzes the correct percent per location but only for the most recent two days
+
+```{r fig.height = 8, fig.width = 8}
+
+###Get the most recent days using plyr
+
+totaldays1<-ddply(performance, .(mouse), summarize, TotalDays = length(DaysOnSchedule))
+totaldays1$recent<-(c(totaldays1$TotalDays)-2)
+
+
+###for the plyr chart add the "recent" column
+mouses<-z$mouse
+
+for(i in 1:nrow(z)){z$recent[i]<- totaldays1[((mouses[i] == totaldays1$mouse)), 3]}
+
+recentcorrectpercent<-z[z$DaysOnSchedule > z$recent,]
+
+recentcorrectpercentchart<-ddply(recentcorrectpercent, .(mouse, CorrGridPosition), summarize, correct = sum(correct), totalgridposition = sum(totalgridposition))
+
+### This is a summary of the performance for each location ONLY for the last TWO DAYS
+
+
+ggplot(recentcorrectpercentchart, aes( x= CorrGridPosition, y = (correct/totalgridposition), group = mouse)) + geom_point()+ facet_wrap(~ mouse) +  geom_hline(aes(yintercept = .85), size = .5) + ggtitle("Performance for Each Position Over Most Recent 2 Days")
+
+
+```
+
+
+
+Anayzes only incorrect trials and where the mouse touched, INDEPENDENT of where the correct image was located normalized by the total number of incorrect trials the mouse had.
+
+```{r}
+
+### Where the mouse touched when incorrect INDEPENDENT of where the correct position was
+
+alltrials<- dfkeep$correct
+
+inconly<- dfkeep[alltrials< 1, ]
+incsummary<- ddply(inconly, .(mouse, GridTouch), summarize, totalgridposition = length(GridTouch),  correct = sum(correct))
+
+totalincorrects<- ddply(inconly, .(mouse), summarize, TotalIncorrects = length(GridTouch))
+
+###Normalize by Total Incorrects
+
+b<-incsummary$mouse
+for(i in seq_along(b)){incsummary$TotalIncorrects[i]<- totalincorrects[(b[i] == totalincorrects$mouse), 2]}
+
+
+incgraph<- ggplot(incsummary, aes(x = GridTouch, y = totalgridposition/TotalIncorrects, group = GridTouch)) + geom_point(size = 3) + facet_wrap(~ mouse) + ggtitle("Number of Incorrect Touches to Location Independent of Correct Grid Position")
+incgraph
+
+```
+
+This graph only analyzes incorrect trials and illustrates exactly which combination of image position and subsquent touch occured. Notation is as follows: (Correct Grid Position, Actual Touch)
+
+```{r}
+### Incorrect Combos per mouse. This graph only analyzes incorrect trials
+### Maybe change #of days?
+
+### Create a DaysOnSchedule column for inconly
+incmice<- inconly$mouse
+incdates<- inconly$date
+for(i in 1:nrow(inconly)){inconly$DaysOnSchedule[i]<- performance[((incmice[i] == performance$mouse) & (incdates[i] == performance$date)), 5]}
+
+### Use only the last three days on the schedule
+totaldays<-ddply(performance, .(mouse), summarize, TotalDays = length(DaysOnSchedule))
+totaldays$recent<-(c(totaldays$TotalDays)-3)
+
+
+
+
+incsummarytouches<- ddply(inconly, .(mouse, DaysOnSchedule, CorrGridPosition, GridTouch), summarize, totaloccurances = length(GridTouch),  correct = sum(correct))
+
+incsummarytouches$combos <-as.character(paste(incsummarytouches$CorrGridPosition, incsummarytouches$GridTouch), sep = ",")
+
+### Add in Total Incorrects
+c<-incsummarytouches$mouse
+for(i in seq_along(c)){incsummarytouches$TotalIncorrects[i]<- totalincorrects[(c[i] == totalincorrects$mouse), 2]}
+
+### When mouse# in both data frames & DaysOnSchedule is > the set "recent" date, grab these numbers and make a new data frame.
+test1<-c()
+for(i in 1:nrow(incsummarytouches)){ 
+  
+  a<-((incsummarytouches$mouse[i] == totaldays$mouse) & 
+                                      (incsummarytouches$DaysOnSchedule[i] > totaldays$recent))
+  b<-TRUE %in% a
+  
+  if (b == TRUE) {test1<- append(test1, i)}
+  
+}
+###Make Recent Table
+recent<-incsummarytouches[test1,]
+###Add Total Incorrects for last three days (Must delete old TotalInc Column First)
+recent<- recent[,1:7]
+###Make table listing total incorrects
+recentsummary<- ddply(recent, .(mouse), summarize, TotalIncorrects = sum(totaloccurances))
+c<-recent$mouse
+
+### When mouse# in recent == mouse# in recentsumamry grab the second column and call it TotalIncorrects
+
+for(i in seq_along(c)){recent$TotalIncorrects[i]<- recentsummary[(c[i] == recentsummary$mouse), 2]}
+
+for(i in seq_along(c)){recent$TotalIncorrects[i]<- recentsummary[(c[i] == recentsummary$mouse), 2]}
+ ###Do this same loop for combo chart
+combochart<-ddply(recent, .(mouse, combos), summarize, totaloccurances = sum(totaloccurances))
+c<-combochart$mouse
+for(i in seq_along(c)){combochart$TotalIncorrects[i]<- recentsummary[(c[i] == recentsummary$mouse), 2]}
+
+
+
+```
+
+
+
+Export Summary Data Frames for Analysis
+```{r}
+
+write.csv(initialdaypassed, file = "initialdaypassed.csv", row.names = FALSE)
+write.csv(totaltimerecentmean, file = "totaltimerecentmean.csv", row.names = FALSE)
+write.csv(initialdaypassednc, file = "initialdaypassednc.csv", row.names = FALSE)
+write.csv(performance, file = "performancePI.csv", row.names = FALSE)
+
+
+
+
+```
+
